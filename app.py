@@ -643,15 +643,9 @@ elif page == "About":
     To make air travel more informed, convenient
     and predictable through intelligent flight insights.
 
-    ### Project Team
+ 
 
-    - Satwik Hiremath
-    - Nitish Yadav
 
-    ### Project Title
-
-    Flight Delay Prediction and Disruption Risk
-    Classification System.
     """)
 
 
