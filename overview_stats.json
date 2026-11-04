@@ -1,0 +1,8 @@
+{
+    "total_flights": 60433487,
+    "delayed_flights": 10480078,
+    "not_delayed_flights": 49953409,
+    "delay_rate_pct": 17.34,
+    "source_dataset": "flight_data.csv",
+    "note": "Aggregated historical statistics from the processed dataset."
+}
