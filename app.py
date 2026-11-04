@@ -1,25 +1,16 @@
 import json
 from pathlib import Path
-from datetime import time
 
-import joblib
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from common import load_model_bundle, build_prediction_input
+from common import load_model_bundle, build_prediction_input, predict_flight
 
 
 # =========================================================
-# CONFIGURATION
+# PAGE CONFIGURATION
 # =========================================================
-
-BASE = Path(__file__).resolve().parent
-
-MODEL_PATH = BASE / "models" / "flight_delay_model.joblib"
-METRICS_PATH = BASE / "models" / "metrics.json"
-
-ANALYTICS_PATH = BASE / "data" / "analytics"
 
 st.set_page_config(
     page_title="SKYPREDICT | Flight Intelligence",
@@ -30,131 +21,72 @@ st.set_page_config(
 
 
 # =========================================================
-# DESIGN
+# PATH CONFIGURATION
+# =========================================================
+
+BASE_DIR = Path(__file__).resolve().parent
+
+MODEL_PATH = BASE_DIR / "models" / "flight_delay_model.joblib"
+METRICS_PATH = BASE_DIR / "models" / "metrics.json"
+
+ANALYTICS_DIR = BASE_DIR / "data" / "analytics"
+
+OVERVIEW_PATH = ANALYTICS_DIR / "overview_stats.json"
+
+
+# =========================================================
+# CUSTOM CSS
 # =========================================================
 
 st.markdown("""
 <style>
 
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap');
-
-html, body, [class*="css"] {
-    font-family: 'DM Sans', sans-serif;
-}
-
-.stApp {
-    background: #f4f7fc;
-}
-
-header {
-    visibility: hidden;
+.main {
+    background-color: #f8fafc;
 }
 
 .block-container {
     padding-top: 2rem;
-    padding-bottom: 3rem;
-    max-width: 1450px;
-}
-
-[data-testid="stSidebar"] {
-    background: #101d35;
-}
-
-[data-testid="stSidebar"] * {
-    color: white !important;
-}
-
-.brand {
-    font-size: 27px;
-    font-weight: 800;
-    color: white;
-    letter-spacing: 1px;
-}
-
-.brand span {
-    color: #55b5ff;
-}
-
-.sidebar-caption {
-    color: #aabbd5 !important;
-    font-size: 11px;
-    letter-spacing: 2px;
-}
-
-.hero {
-    background: linear-gradient(115deg, #10213e, #1769aa);
-    padding: 35px;
-    border-radius: 20px;
-    color: white;
-    margin-bottom: 25px;
-}
-
-.hero h1 {
-    color: white;
-    font-size: 38px;
-    font-weight: 800;
-}
-
-.hero p {
-    color: #dcecff;
-    font-size: 15px;
-}
-
-.section-title {
-    color: #172b4d;
-    font-size: 23px;
-    font-weight: 800;
-    margin-top: 25px;
-    margin-bottom: 15px;
+    padding-bottom: 2rem;
 }
 
 .metric-card {
-    background: white;
-    border: 1px solid #e7ebf2;
-    border-radius: 15px;
-    padding: 20px;
-    min-height: 120px;
+    background-color: white;
+    padding: 22px;
+    border-radius: 12px;
+    border: 1px solid #e5e7eb;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.04);
 }
 
 .metric-label {
-    color: #718096;
-    font-size: 12px;
-    font-weight: 700;
-    text-transform: uppercase;
+    font-size: 14px;
+    color: #64748b;
+    font-weight: 600;
 }
 
 .metric-value {
-    color: #1769aa;
-    font-size: 27px;
+    font-size: 30px;
+    font-weight: 700;
+    color: #0f172a;
+    margin-top: 8px;
+}
+
+.hero-title {
+    font-size: 42px;
     font-weight: 800;
-    margin-top: 10px;
+    color: #0f172a;
 }
 
-.panel {
-    background: white;
-    padding: 22px;
-    border-radius: 16px;
-    border: 1px solid #e7ebf2;
-    margin-bottom: 20px;
-}
-
-.result-card {
-    background: linear-gradient(135deg, #10213e, #1769aa);
-    padding: 30px;
-    border-radius: 18px;
-    color: white;
-    text-align: center;
-}
-
-.result-card h2 {
-    color: white;
+.hero-description {
+    color: #64748b;
+    font-size: 16px;
 }
 
 .footer {
     text-align: center;
-    color: #8793a5;
-    padding: 30px;
+    color: #64748b;
     font-size: 12px;
+    padding: 25px;
 }
 
 </style>
@@ -162,85 +94,81 @@ header {
 
 
 # =========================================================
-# LOAD MODEL
-# =========================================================
-
-bundle = None
-pipeline = None
-model_error = None
-
-if MODEL_PATH.exists():
-
-    try:
-        bundle = load_model_bundle(MODEL_PATH)
-        pipeline = bundle["pipeline"]
-
-    except Exception as exc:
-        model_error = str(exc)
-
-else:
-    model_error = "Trained model file not found."
-
-
-# =========================================================
-# LOAD METRICS
-# =========================================================
-
-metrics = {}
-
-if METRICS_PATH.exists():
-
-    try:
-        with open(METRICS_PATH, "r", encoding="utf-8") as file:
-            metrics = json.load(file)
-
-    except Exception as exc:
-        st.warning(f"Could not load evaluation metrics: {exc}")
-
-
-# =========================================================
-# LOAD ANALYTICS DATA
+# DATA LOADING FUNCTIONS
 # =========================================================
 
 @st.cache_data
-def load_csv(filename):
+def load_json_file(file_path):
 
-    path = ANALYTICS_PATH / filename
-
-    if not path.exists():
-        return pd.DataFrame()
-
-    try:
-        return pd.read_csv(path)
-
-    except Exception:
-        return pd.DataFrame()
-
-
-@st.cache_data
-def load_overview():
-
-    path = ANALYTICS_PATH / "overview_stats.json"
-
-    if not path.exists():
+    if not file_path.exists():
         return {}
 
     try:
-        with open(path, "r", encoding="utf-8") as file:
+        with open(file_path, "r", encoding="utf-8") as file:
             return json.load(file)
 
     except Exception:
         return {}
 
 
-airline_df = load_csv("airline_stats.csv")
-origin_df = load_csv("origin_airport_stats.csv")
-destination_df = load_csv("destination_airport_stats.csv")
-monthly_df = load_csv("monthly_stats.csv")
-yearly_df = load_csv("yearly_stats.csv")
-route_df = load_csv("top_route_stats.csv")
+@st.cache_data
+def load_csv_file(file_path):
 
-overview = load_overview()
+    if not file_path.exists():
+        return pd.DataFrame()
+
+    try:
+        return pd.read_csv(file_path)
+
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_resource
+def load_prediction_model():
+
+    if not MODEL_PATH.exists():
+        return None
+
+    try:
+        return load_model_bundle(MODEL_PATH)
+
+    except Exception:
+        return None
+
+
+# =========================================================
+# LOAD PROJECT DATA
+# =========================================================
+
+overview = load_json_file(OVERVIEW_PATH)
+metrics = load_json_file(METRICS_PATH)
+
+model_bundle = load_prediction_model()
+
+airline_data = load_csv_file(
+    ANALYTICS_DIR / "airline_stats.csv"
+)
+
+origin_data = load_csv_file(
+    ANALYTICS_DIR / "origin_airport_stats.csv"
+)
+
+destination_data = load_csv_file(
+    ANALYTICS_DIR / "destination_airport_stats.csv"
+)
+
+monthly_data = load_csv_file(
+    ANALYTICS_DIR / "monthly_stats.csv"
+)
+
+yearly_data = load_csv_file(
+    ANALYTICS_DIR / "yearly_stats.csv"
+)
+
+route_data = load_csv_file(
+    ANALYTICS_DIR / "top_route_stats.csv"
+)
 
 
 # =========================================================
@@ -249,93 +177,50 @@ overview = load_overview()
 
 def format_number(value):
 
-    return f"{int(value):,}"
+    try:
+        return f"{int(float(value)):,}"
+
+    except (ValueError, TypeError):
+        return "0"
 
 
-def format_percentage(value):
+def show_metric(title, value):
 
-    return f"{float(value):.2f}%"
-
-
-def format_metric(key):
-
-    value = metrics.get(key)
-
-    if value is None:
-        return "N/A"
-
-    if isinstance(value, (int, float)):
-
-        if key in ["accuracy", "precision", "recall", "f1",
-                   "roc_auc", "best_cv_f1"]:
-
-            return f"{value * 100:.2f}%"
-
-        return f"{value:,.2f}"
-
-    return str(value)
-
-
-def show_hero(title, description, tag):
-
-    st.markdown(f"""
-    <div class="hero">
-
-        <div style="font-size:11px;letter-spacing:2px;">
-            {tag}
+    st.markdown(
+        f"""
+        <div class="metric-card">
+            <div class="metric-label">{title}</div>
+            <div class="metric-value">{value}</div>
         </div>
-
-        <h1>{title}</h1>
-
-        <p>{description}</p>
-
-    </div>
-    """, unsafe_allow_html=True)
+        """,
+        unsafe_allow_html=True
+    )
 
 
-def show_metric(label, value):
-
-    st.markdown(f"""
-    <div class="metric-card">
-
-        <div class="metric-label">
-            {label}
-        </div>
-
-        <div class="metric-value">
-            {value}
-        </div>
-
-    </div>
-    """, unsafe_allow_html=True)
-
-
-def show_chart(data, x, y, title, chart_type="bar"):
+def show_chart(data, x_column, y_column, title, chart_type="bar"):
 
     if data.empty:
-        st.info(f"{title}: Data is not available.")
+        st.info("Analytics data is not available.")
         return
 
-    if x not in data.columns or y not in data.columns:
-        st.warning(f"{title}: Required columns are missing.")
+    if x_column not in data.columns or y_column not in data.columns:
+        st.info("Required chart columns are not available.")
         return
 
     if chart_type == "line":
-
         fig = px.line(
             data,
-            x=x,
-            y=y,
+            x=x_column,
+            y=y_column,
             markers=True,
             title=title
         )
 
     else:
-
         fig = px.bar(
             data,
-            x=x,
-            y=y,
+            x=x_column,
+            y=y_column,
             title=title
         )
 
@@ -348,64 +233,63 @@ def show_chart(data, x, y, title, chart_type="bar"):
     st.plotly_chart(fig, use_container_width=True)
 
 
-def show_data(data):
+def show_first_available_chart(data, title):
 
-    if not data.empty:
-        st.dataframe(
-            data,
-            use_container_width=True,
-            hide_index=True
-        )
-    else:
-        st.info("No data available.")
+    if data.empty:
+        st.info(f"{title}: Data not available.")
+        return
+
+    numeric_columns = data.select_dtypes(
+        include="number"
+    ).columns.tolist()
+
+    categorical_columns = data.select_dtypes(
+        exclude="number"
+    ).columns.tolist()
+
+    if not numeric_columns or not categorical_columns:
+        st.info(f"{title}: Suitable chart columns not found.")
+        return
+
+    x_column = categorical_columns[0]
+    y_column = numeric_columns[0]
+
+    chart_data = data.head(15)
+
+    show_chart(
+        chart_data,
+        x_column,
+        y_column,
+        title
+    )
 
 
 # =========================================================
-# SIDEBAR
+# SIDEBAR NAVIGATION
 # =========================================================
 
-with st.sidebar:
+st.sidebar.markdown("# ✈️ SKYPREDICT")
 
-    st.markdown(
-        '<div class="brand">SKY<span>PREDICT</span></div>',
-        unsafe_allow_html=True
-    )
+st.sidebar.caption(
+    "Intelligent Flight Analytics Platform"
+)
 
-    st.markdown(
-        '<div class="sidebar-caption">FLIGHT INTELLIGENCE</div>',
-        unsafe_allow_html=True
-    )
+page = st.sidebar.radio(
+    "NAVIGATION",
+    [
+        "Dashboard",
+        "Predict Flight",
+        "Flight Insights",
+        "Model Performance",
+        "About"
+    ]
+)
 
-    st.divider()
+st.sidebar.markdown("---")
 
-    page = st.radio(
-        "NAVIGATION",
-        [
-            "Dashboard",
-            "Predict Flight",
-            "Flight Insights",
-            "Model Performance",
-            "About"
-        ]
-    )
-
-    st.divider()
-
-    if pipeline is not None:
-        st.success("Prediction Engine Online")
-    else:
-        st.error("Prediction Engine Offline")
-
-    if overview:
-        st.caption(
-            f"Historical Flights: "
-            f"{format_number(overview.get('total_flights', 0))}"
-        )
-
-    st.markdown(
-        '<p class="footer">SKYPREDICT v2.0</p>',
-        unsafe_allow_html=True
-    )
+st.sidebar.caption(
+    "SKYPREDICT | Flight Intelligence"
+)
 
 
 # =========================================================
@@ -414,83 +298,127 @@ with st.sidebar:
 
 if page == "Dashboard":
 
-    show_hero(
-        "Know Before You Fly.",
-        "Intelligent flight analytics and machine-learning-based "
-        "flight delay predictions.",
-        "FLIGHT INTELLIGENCE PLATFORM"
-    )
-
     st.markdown(
-        '<div class="section-title">Your Dashboard</div>',
+        """
+        <div style="font-size:11px;letter-spacing:2px;color:#64748b;">
+            FLIGHT INTELLIGENCE PLATFORM
+        </div>
+
+        <div class="hero-title">
+            Know Before You Fly.
+        </div>
+
+        <div class="hero-description">
+            Intelligent flight analytics and machine-learning-based
+            flight delay predictions.
+        </div>
+        """,
         unsafe_allow_html=True
     )
 
-    total = overview.get("total_flights", 0)
-    delayed = overview.get("delayed_flights", 0)
-    not_delayed = overview.get("not_delayed_flights", 0)
-    delay_rate = overview.get("delay_rate_pct", 0)
+    st.markdown("---")
 
-    c1, c2, c3, c4 = st.columns(4)
+    st.subheader("Your Dashboard")
+
+    # Read actual values from overview_stats.json
+
+    total_flights = overview.get("total_flights", 0)
+
+    delayed_flights = overview.get("delayed_flights", 0)
+
+    on_time_flights = overview.get(
+        "not_delayed_flights", 0
+    )
+
+    delay_percentage = overview.get(
+        "delay_rate_pct", 0
+    )
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        show_metric(
+            "Total Flights",
+            format_number(total_flights)
+        )
+
+    with col2:
+        show_metric(
+            "Delayed Flights",
+            format_number(delayed_flights)
+        )
+
+    with col3:
+        show_metric(
+            "On-Time Flights",
+            format_number(on_time_flights)
+        )
+
+    with col4:
+        show_metric(
+            "Delay Percentage",
+            f"{float(delay_percentage):.2f}%"
+        )
+
+    if not overview:
+        st.warning(
+            "Dashboard statistics could not be loaded. "
+            "Check data/analytics/overview_stats.json."
+        )
+
+    st.markdown("---")
+
+    st.subheader("Historical Flight Trends")
+
+    trend_col1, trend_col2 = st.columns(2)
+
+    with trend_col1:
+
+        if not monthly_data.empty:
+
+            show_first_available_chart(
+                monthly_data,
+                "Monthly Flight Statistics"
+            )
+
+        else:
+            st.info("Monthly statistics are unavailable.")
+
+    with trend_col2:
+
+        if not yearly_data.empty:
+
+            show_first_available_chart(
+                yearly_data,
+                "Yearly Flight Statistics"
+            )
+
+        else:
+            st.info("Yearly statistics are unavailable.")
+
+    st.markdown("---")
+
+    st.subheader("Prediction Model Snapshot")
+
+    c1, c2, c3 = st.columns(3)
 
     with c1:
-        show_metric("Total Flights", format_number(total))
+        show_metric(
+            "Accuracy",
+            f"{metrics.get('accuracy', 0) * 100:.2f}%"
+        )
 
     with c2:
-        show_metric("Delayed Flights", format_number(delayed))
+        show_metric(
+            "Precision",
+            f"{metrics.get('precision', 0) * 100:.2f}%"
+        )
 
     with c3:
-        show_metric("On-Time Flights", format_number(not_delayed))
-
-    with c4:
-        show_metric("Delay Percentage", format_percentage(delay_rate))
-
-    st.markdown(
-        '<div class="section-title">Historical Flight Trends</div>',
-        unsafe_allow_html=True
-    )
-
-    if not yearly_df.empty:
-
-        show_chart(
-            yearly_df,
-            "YEAR",
-            "flights",
-            "Yearly Flight Volume",
-            "line"
+        show_metric(
+            "Recall",
+            f"{metrics.get('recall', 0) * 100:.2f}%"
         )
-
-    if not monthly_df.empty:
-
-        monthly_df["period"] = (
-            monthly_df["YEAR"].astype(str)
-            + "-"
-            + monthly_df["MONTH"].astype(str).str.zfill(2)
-        )
-
-        show_chart(
-            monthly_df,
-            "period",
-            "flights",
-            "Monthly Flight Volume",
-            "line"
-        )
-
-    st.markdown(
-        '<div class="section-title">Prediction Model Snapshot</div>',
-        unsafe_allow_html=True
-    )
-
-    a, b, c = st.columns(3)
-
-    with a:
-        st.metric("Accuracy", format_metric("accuracy"))
-
-    with b:
-        st.metric("Precision", format_metric("precision"))
-
-    with c:
-        st.metric("Recall", format_metric("recall"))
 
 
 # =========================================================
@@ -499,168 +427,133 @@ if page == "Dashboard":
 
 elif page == "Predict Flight":
 
-    show_hero(
-        "Check Your Flight Risk.",
-        "Enter flight information to estimate the possibility "
-        "of a departure delay.",
-        "PREDICTION STUDIO"
+    st.title("✈️ Flight Delay Prediction")
+
+    st.write(
+        "Enter flight details to estimate the possibility "
+        "of a departure delay."
     )
 
-    airlines = {
-        "Southwest Airlines": "WN",
-        "American Airlines": "AA",
-        "Delta Air Lines": "DL",
-        "United Airlines": "UA",
-        "JetBlue Airways": "B6",
-        "Alaska Airlines": "AS",
-        "Spirit Airlines": "NK",
-        "Frontier Airlines": "F9",
-        "Other": "Other"
-    }
+    if model_bundle is None:
 
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        airline_name = st.selectbox(
-            "Select Airline",
-            list(airlines.keys())
+        st.error(
+            "Prediction model not found. "
+            "Check models/flight_delay_model.joblib."
         )
 
-        origin = st.selectbox(
-            "Departure Airport",
-            ["JFK", "LAX", "ORD", "ATL", "DFW",
-             "SFO", "DEN", "LAS", "MCO", "SEA"]
-        )
+    else:
 
-    with col2:
+        carrier_options = [
+            "AA", "DL", "UA", "WN", "AS",
+            "B6", "NK", "F9", "G4", "HA",
+            "OO", "YX", "9E", "EV"
+        ]
 
-        destination = st.selectbox(
-            "Arrival Airport",
-            ["LAX", "JFK", "ORD", "ATL", "DFW",
-             "SFO", "DEN", "LAS", "MCO", "SEA"]
-        )
+        col1, col2 = st.columns(2)
 
-        departure_time = st.time_input(
-            "Scheduled Departure Time",
-            value=time(13, 25)
-        )
+        with col1:
 
-    predict_button = st.button(
-        "✈ PREDICT FLIGHT DELAY",
-        use_container_width=True
-    )
-
-    if predict_button:
-
-        if origin == destination:
-
-            st.error(
-                "Departure and arrival airports must be different."
+            carrier = st.selectbox(
+                "Airline Carrier",
+                carrier_options
             )
 
-        elif pipeline is None or bundle is None:
+            origin = st.text_input(
+                "Origin Airport Code",
+                value="ATL",
+                max_chars=3
+            ).upper().strip()
 
-            st.error(
-                "Prediction model is unavailable. "
-                "Check the model file and common.py."
+        with col2:
+
+            destination = st.text_input(
+                "Destination Airport Code",
+                value="ORD",
+                max_chars=3
+            ).upper().strip()
+
+            departure_time = st.time_input(
+                "Scheduled Departure Time"
             )
 
-        else:
+        if st.button(
+            "Predict Flight Delay",
+            type="primary",
+            use_container_width=True
+        ):
 
-            try:
+            if (
+                len(origin) != 3
+                or len(destination) != 3
+            ):
 
-                carrier = airlines[airline_name]
-
-                departure_hhmm = (
-                    departure_time.hour * 100
-                    + departure_time.minute
+                st.error(
+                    "Enter valid three-letter airport codes."
                 )
 
-                input_data = build_prediction_input(
-                    bundle,
-                    carrier,
-                    origin,
-                    destination,
-                    departure_hhmm
+            elif origin == destination:
+
+                st.error(
+                    "Origin and destination cannot be the same."
                 )
 
-                prediction = pipeline.predict(input_data)[0]
+            else:
 
-                probability = None
+                try:
 
-                if hasattr(pipeline, "predict_proba"):
+                    departure_hhmm = (
+                        departure_time.hour * 100
+                        + departure_time.minute
+                    )
 
-                    probabilities = pipeline.predict_proba(
-                        input_data
-                    )[0]
+                    features = build_prediction_input(
+                        model_bundle,
+                        carrier,
+                        origin,
+                        destination,
+                        departure_hhmm
+                    )
 
-                    classes = list(pipeline.classes_)
+                    prediction, probability = predict_flight(
+                        model_bundle,
+                        features
+                    )
 
-                    if 1 in classes:
+                    st.markdown("---")
 
-                        probability = float(
-                            probabilities[classes.index(1)]
+                    if int(prediction) == 1:
+
+                        st.error(
+                            "⚠️ Flight Delay Likely"
                         )
 
-                risk = (
-                    f"{probability:.1%}"
-                    if probability is not None
-                    else "Unavailable"
-                )
+                    else:
 
-                if int(prediction) == 1:
+                        st.success(
+                            "✅ Flight Likely to Be On Time"
+                        )
 
-                    st.markdown(f"""
-                    <div class="result-card">
+                    if probability is not None:
 
-                        <h2>⚠ Flight Delay Likely</h2>
+                        st.metric(
+                            "Estimated Delay Probability",
+                            f"{probability * 100:.2f}%"
+                        )
 
-                        <p>Your flight is classified as likely to be delayed.</p>
+                        st.progress(
+                            min(max(probability, 0.0), 1.0)
+                        )
 
-                        <h1>{risk}</h1>
-
-                        <p>Estimated delay probability</p>
-
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                    st.warning(
-                        "Consider allowing extra time for your journey. "
-                        "This is a machine-learning estimate, not a live "
-                        "airline update."
+                    st.caption(
+                        "This prediction is generated by a "
+                        "machine-learning model using historical data."
                     )
 
-                else:
+                except Exception as error:
 
-                    st.markdown(f"""
-                    <div class="result-card">
-
-                        <h2>✓ Delay Not Expected</h2>
-
-                        <p>Your flight is classified as unlikely to be delayed.</p>
-
-                        <h1>{risk}</h1>
-
-                        <p>Estimated delay probability</p>
-
-                    </div>
-                    """, unsafe_allow_html=True)
-
-                    st.success(
-                        "The model predicts a lower risk of delay. "
-                        "Confirm your flight status with the airline."
+                    st.error(
+                        f"Prediction failed: {error}"
                     )
-
-                st.caption(
-                    f"Route: {origin} → {destination} | "
-                    f"Airline: {airline_name} | "
-                    f"Departure: {departure_time.strftime('%H:%M')}"
-                )
-
-            except Exception as exc:
-
-                st.error(f"Prediction failed: {exc}")
 
 
 # =========================================================
@@ -669,174 +562,78 @@ elif page == "Predict Flight":
 
 elif page == "Flight Insights":
 
-    show_hero(
-        "Explore Flight Insights.",
-        "Understand historical flight patterns, airline performance "
-        "and airport delay statistics.",
-        "HISTORICAL FLIGHT ANALYTICS"
+    st.title("📊 Flight Insights")
+
+    st.write(
+        "Explore historical flight patterns and statistics."
     )
 
-    st.markdown(
-        '<div class="section-title">Airline Analysis</div>',
-        unsafe_allow_html=True
+    st.markdown("---")
+
+    st.subheader("Airline Statistics")
+
+    show_first_available_chart(
+        airline_data,
+        "Flight Statistics by Airline"
     )
 
-    if not airline_df.empty:
+    st.markdown("---")
 
-        c1, c2 = st.columns(2)
+    col1, col2 = st.columns(2)
 
-        with c1:
+    with col1:
 
-            show_chart(
-                airline_df.sort_values(
-                    "flights",
-                    ascending=False
-                ),
-                "OP_CARRIER",
-                "flights",
-                "Flight Volume by Airline"
-            )
+        st.subheader("Origin Airport Statistics")
 
-        with c2:
+        show_first_available_chart(
+            origin_data,
+            "Top Origin Airports"
+        )
 
-            show_chart(
-                airline_df.sort_values(
-                    "delay_rate_pct",
-                    ascending=False
-                ),
-                "OP_CARRIER",
-                "delay_rate_pct",
-                "Airline Delay Percentage"
-            )
+    with col2:
 
-        st.markdown("### Airline Statistics")
+        st.subheader("Destination Airport Statistics")
 
-        show_data(airline_df)
+        show_first_available_chart(
+            destination_data,
+            "Top Destination Airports"
+        )
+
+    st.markdown("---")
+
+    st.subheader("Monthly Flight Statistics")
+
+    show_first_available_chart(
+        monthly_data,
+        "Monthly Flight Trends"
+    )
+
+    st.markdown("---")
+
+    st.subheader("Yearly Flight Statistics")
+
+    show_first_available_chart(
+        yearly_data,
+        "Yearly Flight Trends"
+    )
+
+    st.markdown("---")
+
+    st.subheader("Popular Flight Routes")
+
+    if not route_data.empty:
+
+        st.dataframe(
+            route_data,
+            use_container_width=True,
+            hide_index=True
+        )
 
     else:
 
-        st.warning("Airline analytics file not found.")
-
-    # AIRPORT ANALYSIS
-
-    st.markdown(
-        '<div class="section-title">Airport Analysis</div>',
-        unsafe_allow_html=True
-    )
-
-    c1, c2 = st.columns(2)
-
-    with c1:
-
-        show_chart(
-            origin_df.head(15),
-            "ORIGIN",
-            "flights",
-            "Top Departure Airports"
+        st.info(
+            "Route statistics are not available."
         )
-
-    with c2:
-
-        show_chart(
-            destination_df.head(15),
-            "DEST",
-            "flights",
-            "Top Arrival Airports"
-        )
-
-    # MONTHLY ANALYSIS
-
-    st.markdown(
-        '<div class="section-title">Monthly Flight Trends</div>',
-        unsafe_allow_html=True
-    )
-
-    if not monthly_df.empty:
-
-        monthly_df = monthly_df.copy()
-
-        monthly_df["period"] = (
-            monthly_df["YEAR"].astype(str)
-            + "-"
-            + monthly_df["MONTH"].astype(str).str.zfill(2)
-        )
-
-        c1, c2 = st.columns(2)
-
-        with c1:
-
-            show_chart(
-                monthly_df,
-                "period",
-                "flights",
-                "Monthly Flight Volume",
-                "line"
-            )
-
-        with c2:
-
-            show_chart(
-                monthly_df,
-                "period",
-                "delay_rate_pct",
-                "Monthly Delay Percentage",
-                "line"
-            )
-
-        show_data(monthly_df)
-
-    # YEARLY ANALYSIS
-
-    st.markdown(
-        '<div class="section-title">Yearly Flight Trends</div>',
-        unsafe_allow_html=True
-    )
-
-    if not yearly_df.empty:
-
-        c1, c2 = st.columns(2)
-
-        with c1:
-
-            show_chart(
-                yearly_df,
-                "YEAR",
-                "flights",
-                "Yearly Flight Volume",
-                "line"
-            )
-
-        with c2:
-
-            show_chart(
-                yearly_df,
-                "YEAR",
-                "delay_rate_pct",
-                "Yearly Delay Percentage",
-                "line"
-            )
-
-    # ROUTE ANALYSIS
-
-    st.markdown(
-        '<div class="section-title">Popular Flight Routes</div>',
-        unsafe_allow_html=True
-    )
-
-    if not route_df.empty:
-
-        show_chart(
-            route_df.head(15),
-            "ROUTE",
-            "flights",
-            "Top Flight Routes"
-        )
-
-        show_data(route_df)
-
-    else:
-
-        st.info("Route analytics are not available.")
 
 
 # =========================================================
@@ -845,76 +642,105 @@ elif page == "Flight Insights":
 
 elif page == "Model Performance":
 
-    show_hero(
-        "Prediction Performance.",
-        "Evaluation results of the trained Logistic Regression model.",
-        "MODEL INTELLIGENCE"
+    st.title("🤖 Model Performance")
+
+    st.write(
+        "Evaluation results of the trained flight delay "
+        "classification model."
     )
 
-    if metrics:
+    if not metrics:
 
-        st.markdown("### Evaluation Metrics")
-
-        c1, c2, c3, c4 = st.columns(4)
-
-        with c1:
-            st.metric("Accuracy", format_metric("accuracy"))
-
-        with c2:
-            st.metric("Precision", format_metric("precision"))
-
-        with c3:
-            st.metric("Recall", format_metric("recall"))
-
-        with c4:
-            st.metric("F1 Score", format_metric("f1"))
-
-        c5, c6 = st.columns(2)
-
-        with c5:
-            st.metric("ROC-AUC", format_metric("roc_auc"))
-
-        with c6:
-            st.metric("Cross Validation F1", format_metric("best_cv_f1"))
-
-        st.markdown("### Model Information")
-
-        st.write(
-            "Selected Model:",
-            metrics.get("model", "Not available")
-        )
-
-        st.write(
-            "Training Records:",
-            format_number(metrics.get("training_rows", 0))
-        )
-
-        st.write(
-            "Testing Records:",
-            format_number(metrics.get("testing_rows", 0))
-        )
-
-        st.write(
-            "Training Period:",
-            metrics.get("training_years", "Not available")
-        )
-
-        st.write(
-            "Testing Period:",
-            metrics.get("testing_years", "Not available")
-        )
-
-        st.info(
-            "These results are based on historical model evaluation. "
-            "Predictions are estimates and are not live airline information."
+        st.warning(
+            "Model evaluation metrics are unavailable."
         )
 
     else:
 
-        st.warning(
-            "Evaluation metrics are unavailable. "
-            "Check models/metrics.json."
-        )
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+
+            show_metric(
+                "Accuracy",
+                f"{metrics.get('accuracy', 0) * 100:.2f}%"
+            )
+
+        with col2:
+
+            show_metric(
+                "Precision",
+                f"{metrics.get('precision', 0) * 100:.2f}%"
+            )
+
+        with col3:
+
+            show_metric(
+                "Recall",
+                f"{metrics.get('recall', 0) * 100:.2f}%"
+            )
+
+        col4, col5, col6 = st.columns(3)
+
+        with col4:
+
+            show_metric(
+                "F1 Score",
+                f"{metrics.get('f1', 0) * 100:.2f}%"
+            )
+
+        with col5:
+
+            show_metric(
+                "ROC-AUC",
+                f"{metrics.get('roc_auc', 0) * 100:.2f}%"
+            )
+
+        with col6:
+
+            show_metric(
+                "Best CV F1",
+                f"{metrics.get('best_cv_f1', 0) * 100:.2f}%"
+            )
+
+        st.markdown("---")
+
+        st.subheader("Training Information")
+
+        info_col1, info_col2 = st.columns(2)
+
+        with info_col1:
+
+            st.write(
+                "**Model:**",
+                metrics.get("model", "Not available")
+            )
+
+            st.write(
+                "**Training Rows:**",
+                format_number(
+                    metrics.get("training_rows", 0)
+                )
+            )
+
+            st.write(
+                "**Testing Rows:**",
+                format_number(
+                    metrics.get("testing_rows", 0)
+                )
+            )
+
+        with info_col2:
+
+            st.write(
+                "**Training Years:**",
+                metrics.get("training_years", "Not available")
+            )
+
+            st.write(
+                "**Testing Years:**",
+                metrics.get("testing_years", "Not available")
+            )
 
 
 # =========================================================
@@ -923,43 +749,45 @@ elif page == "Model Performance":
 
 elif page == "About":
 
-    show_hero(
-        "About SKYPREDICT",
-        "Know More. Travel Smarter.",
-        "ABOUT OUR PLATFORM"
-    )
+    st.title("About SKYPREDICT")
 
     st.markdown("""
-    ### Welcome to SKYPREDICT
+    **SKYPREDICT** is an intelligent flight analytics
+    and prediction platform designed to estimate the
+    possibility of flight departure delays.
 
-    SKYPREDICT is a flight intelligence platform that combines
-    historical flight analytics and machine-learning-based
-    flight delay prediction.
+    ### Project Objectives
 
-    ### Main Features
+    - Analyze historical airline flight data.
+    - Identify flight delay patterns.
+    - Predict potential departure delays.
+    - Provide meaningful flight analytics.
+    - Support better travel planning through data.
 
-    - Flight delay prediction.
-    - Airline performance analysis.
-    - Airport-level flight statistics.
-    - Monthly and yearly flight trends.
-    - Popular flight route analysis.
-    - Machine learning model evaluation.
+    ### Technology Stack
+
+    - Python
+    - Pandas
+    - Scikit-learn
+    - Streamlit
+    - Plotly
+    - Machine Learning
 
     ### Machine Learning
 
-    Our project uses a Logistic Regression classification model
-    to estimate whether a flight is likely to experience a
-    departure delay exceeding 15 minutes.
+    The application uses a trained Logistic Regression
+    classification pipeline to estimate whether a flight
+    is likely to experience a departure delay.
 
-    ### Dataset
+    ### Project Team
 
-    Historical airline flight records from 2009–2018 were used
-    for model development and analytics.
+    - Satwik Hiremath
+    - Nitish Yadav
 
-    ### Our Vision
+    ### Project
 
-    To make air travel more informed through historical
-    flight intelligence and machine learning.
+    Flight Delay Prediction and Disruption Risk
+    Classification System.
     """)
 
 
@@ -967,15 +795,16 @@ elif page == "About":
 # FOOTER
 # =========================================================
 
-st.markdown("""
-<div class="footer">
+st.markdown("---")
 
-    SKYPREDICT · Intelligent Flight Analytics
-
-    <br>
-
-    Machine-learning-based estimates.
-    Not live airline information.
-
-</div>
-""", unsafe_allow_html=True)
+st.markdown(
+    """
+    <div class="footer">
+        <b>SKYPREDICT</b> · Intelligent Flight Analytics
+        <br><br>
+        Machine-learning-based estimates.
+        Not live airline information.
+    </div>
+    """,
+    unsafe_allow_html=True
+)
